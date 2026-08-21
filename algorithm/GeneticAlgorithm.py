@@ -9,10 +9,17 @@ import time
 
 # --- LỚP CÁ THỂ ---
 class Individual():
-    def __init__(self, customerList: np.array = None, fitness: float = 0, distance: float = 0):
+    def __init__(
+        self,
+        customerList: np.array = None,
+        fitness: float = 0,
+        distance: float = 0,
+        vehicle_count: int = 0
+    ):
         self.customerList = customerList
         self.fitness = fitness
         self.distance = distance
+        self.vehicle_count = vehicle_count
 
     def print(self):
         print(self.customerList, ' ', self.fitness, ' ', self.distance)
@@ -45,55 +52,409 @@ class GA:
     # Khởi tạo quần thể ngẫu nhiên ban đầu
     def initialPopulation(self, cluster) -> None:
         self.__population = [Individual(customerList=np.random.permutation(cluster)) for _ in range(self._individual)]
-    
+    # Xây dựng tuyến xe theo ràng buộc VRPTW Solomon: tải trọng, cửa sổ thời gian và thời gian quay về kho (Cong_1)
     def individualToRoute(self, individual):
-        route = []  
-        vehicle_load = 0  
-        sub_route = []  
-        elapsed_time = 0  
-        last_customer_id = 0  
+        routes = []
+
+        current_route = []
+        vehicle_load = 0
+        current_time = 0
+        last_customer_id = 0
+
         depot = self.customers[0]
 
         for customer_id in individual:
             customer = self.customers[customer_id]
-            demand = customer.demand
-            update_vehicle_load = vehicle_load + demand
 
-            service_time = customer.serviceTime
-            moving_time = np.linalg.norm(customer.xy_coord - self.customers[last_customer_id].xy_coord)
-            arrive_time = elapsed_time + moving_time
+            # ==========================================
+            # 1. Kiểm tra tải trọng
+            # ==========================================
+            new_vehicle_load = vehicle_load + customer.demand
 
-            waiting_time = max(customer.readyTime - self._M - arrive_time, 0)
-            return_time = np.linalg.norm(customer.xy_coord - depot.xy_coord)
+            # ==========================================
+            # 2. Tính thời gian di chuyển từ điểm trước
+            # ==========================================
+            travel_time = np.linalg.norm(
+                self.customers[last_customer_id].xy_coord
+                - customer.xy_coord
+            )
 
-            update_elapsed_time = arrive_time + service_time + waiting_time + return_time
+            arrival_time = current_time + travel_time
 
-            if (update_vehicle_load <= self._vehcicle_capacity) and (update_elapsed_time <= depot.dueTime + self._M):
-                sub_route.append(customer_id)
-                vehicle_load = update_vehicle_load
-                elapsed_time = update_elapsed_time - return_time
+            # ==========================================
+            # 3. Nếu đến sớm thì phải chờ
+            # ==========================================
+            service_start_time = max(
+                arrival_time,
+                customer.readyTime
+            )
+
+            # ==========================================
+            # 4. Kiểm tra cửa sổ thời gian của khách
+            # ==========================================
+            customer_time_feasible = (
+                service_start_time <= customer.dueTime + self._M
+            )
+
+            # ==========================================
+            # 5. Thời gian sau khi phục vụ khách
+            # ==========================================
+            finish_service_time = (
+                service_start_time
+                + customer.serviceTime
+            )
+
+            # ==========================================
+            # 6. Kiểm tra còn quay về kho kịp không
+            # ==========================================
+            return_to_depot_time = np.linalg.norm(
+                customer.xy_coord - depot.xy_coord
+            )
+
+            depot_time_feasible = (
+                finish_service_time
+                + return_to_depot_time
+                <= depot.dueTime + self._M
+            )
+
+            # ==========================================
+            # 7. Kiểm tra có thể thêm khách vào xe hiện tại không
+            # ==========================================
+            can_add_customer = (
+                new_vehicle_load <= self._vehcicle_capacity
+                and customer_time_feasible
+                and depot_time_feasible
+            )
+
+            if can_add_customer:
+                # Thêm khách vào tuyến hiện tại
+                current_route.append(customer_id)
+
+                vehicle_load = new_vehicle_load
+                current_time = finish_service_time
+                last_customer_id = customer_id
+
             else:
-                if sub_route:
-                    route.append(sub_route)
-                sub_route = [customer_id]
-                vehicle_load = demand
-                
-                time_from_depot = np.linalg.norm(depot.xy_coord - customer.xy_coord)
-                arrive_time = time_from_depot
-                waiting_time = max(customer.readyTime - self._M - arrive_time, 0)
-                elapsed_time = arrive_time + service_time + waiting_time
-                
-            last_customer_id = customer_id
-            
-        if sub_route:
-            route.append(sub_route)
-            
-        return [arr for arr in route if len(arr) > 0]
+                # ==========================================
+                # 8. Đóng tuyến hiện tại
+                # ==========================================
+                if current_route:
+                    routes.append(current_route)
 
-    # Tính mức độ thích nghi trên toàn bộ quần thể
+                # ==========================================
+                # 9. Mở xe mới từ depot
+                # ==========================================
+                current_route = []
+                vehicle_load = 0
+                current_time = 0
+                last_customer_id = 0
+
+                # Tính lại cho khách hiện tại từ depot
+                travel_time = np.linalg.norm(
+                    depot.xy_coord
+                    - customer.xy_coord
+                )
+
+                arrival_time = travel_time
+
+                service_start_time = max(
+                    arrival_time,
+                    customer.readyTime
+                )
+
+                finish_service_time = (
+                    service_start_time
+                    + customer.serviceTime
+                )
+
+                return_to_depot_time = np.linalg.norm(
+                    customer.xy_coord
+                    - depot.xy_coord
+                )
+
+                # ==========================================
+                # 10. Kiểm tra khách này tự đi một xe có hợp lệ không
+                # ==========================================
+                single_customer_feasible = (
+                    customer.demand <= self._vehcicle_capacity
+                    and service_start_time <= customer.dueTime + self._M
+                    and finish_service_time + return_to_depot_time
+                    <= depot.dueTime + self._M
+                )
+
+                if single_customer_feasible:
+                    current_route = [customer_id]
+
+                    vehicle_load = customer.demand
+                    current_time = finish_service_time
+                    last_customer_id = customer_id
+
+                else:
+                    # Đây là trường hợp dữ liệu hoặc nghiệm không hợp lệ
+                    raise ValueError(
+                        f"Khách hàng {customer_id} không thể phục vụ hợp lệ "
+                        f"ngay cả khi dùng một xe riêng."
+                    )
+
+        # ==========================================
+        # 11. Thêm tuyến cuối cùng
+        # ==========================================
+        if current_route:
+            routes.append(current_route)
+
+        return routes
+
+    # ==================== Kiểm tra một tuyến có thỏa các ràng buộc VRPTW Solomon hay không ====================
+    def is_route_feasible(self, route):
+        depot = self.customers[0]
+
+        vehicle_load = 0
+        current_time = 0.0
+        last_customer_id = 0
+
+        for customer_id in route:
+            customer = self.customers[customer_id]
+            last_customer = self.customers[last_customer_id]
+
+            # ============================
+            # 1. Kiểm tra tải trọng xe
+            # ============================
+            vehicle_load += customer.demand
+
+            if vehicle_load > self._vehcicle_capacity:
+                return False
+
+            # ============================
+            # 2. Thời gian di chuyển
+            # ============================
+            travel_time = np.linalg.norm(
+                customer.xy_coord - last_customer.xy_coord
+            )
+
+            arrival_time = current_time + travel_time
+
+            # ============================
+            # 3. Nếu đến sớm thì chờ
+            # ============================
+            service_start_time = max(
+                arrival_time,
+                customer.readyTime
+            )
+
+            # ============================
+            # 4. Kiểm tra cửa sổ thời gian
+            # ============================
+            if service_start_time > customer.dueTime + self._M:
+                return False
+
+            # ============================
+            # 5. Cập nhật thời gian sau phục vụ
+            # ============================
+            current_time = (
+                service_start_time
+                + customer.serviceTime
+            )
+
+            last_customer_id = customer_id
+
+        # ============================
+        # 6. Kiểm tra quay về kho
+        # ============================
+        if len(route) > 0:
+            last_customer = self.customers[last_customer_id]
+
+            return_time = np.linalg.norm(
+                last_customer.xy_coord - depot.xy_coord
+            )
+
+            if current_time + return_time > depot.dueTime + self._M:
+                return False
+
+        return True
+
+    # Tính tổng quãng đường của một tuyến 
+    def calculate_route_distance(self, route):
+        if len(route) == 0:
+            return 0.0
+
+        depot = self.customers[0]
+
+        total_distance = 0.0
+        last_customer_id = 0
+
+        for customer_id in route:
+            total_distance += np.linalg.norm(
+                self.customers[last_customer_id].xy_coord
+                - self.customers[customer_id].xy_coord
+            )
+
+            last_customer_id = customer_id
+
+        # Khách cuối quay về kho
+        total_distance += np.linalg.norm(
+            self.customers[last_customer_id].xy_coord
+            - depot.xy_coord
+        )
+
+        return total_distance
+
+    # ==================== Tối ưu thứ tự khách trong một tuyến bằng 2-opt ====================
+    def two_opt_route(self, route):
+        if len(route) < 4:
+            return list(route)
+
+        best_route = list(route)
+        best_distance = self.calculate_route_distance(best_route)
+
+        improved = True
+
+        while improved:
+            improved = False
+
+            for i in range(len(best_route) - 1):
+                for j in range(i + 1, len(best_route)):
+
+                    # Đảo ngược đoạn từ i đến j
+                    new_route = (
+                        best_route[:i]
+                        + best_route[i:j + 1][::-1]
+                        + best_route[j + 1:]
+                    )
+
+                    # Tuyến mới bắt buộc phải thỏa VRPTW
+                    if not self.is_route_feasible(new_route):
+                        continue
+
+                    new_distance = self.calculate_route_distance(new_route)
+
+                    # Chỉ nhận nếu quãng đường giảm
+                    if new_distance < best_distance - 1e-9:
+                        best_route = new_route
+                        best_distance = new_distance
+                        improved = True
+                        break
+
+                if improved:
+                    break
+
+        return best_route
+
+    # Chuyển khách giữa các tuyến để giảm số lượng xe, loại bỏ hoàn toàn một tuyến nếu có thể.
+    def relocate_routes(self, routes):
+
+        routes = [list(route) for route in routes]
+
+        improved = True
+
+        while improved:
+            improved = False
+
+            # Ưu tiên xử lý tuyến ít khách trước
+            route_order = sorted(
+                range(len(routes)),
+                key=lambda i: len(routes[i])
+            )
+
+            for source_idx in route_order:
+
+                # Tuyến nguồn đã bị xóa
+                if source_idx >= len(routes):
+                    continue
+
+                source_route = routes[source_idx]
+
+                if len(source_route) == 0:
+                    continue
+
+                # Thử chuyển toàn bộ khách của tuyến nguồn
+                temp_routes = [
+                    list(route)
+                    for route in routes
+                ]
+
+                customers_to_move = list(source_route)
+
+                success = True
+
+                for customer_id in customers_to_move:
+
+                    best_target_idx = None
+                    best_position = None
+                    best_distance_increase = float("inf")
+
+                    # ==========================================
+                    # Thử chèn khách vào tất cả tuyến khác
+                    # ==========================================
+                    for target_idx, target_route in enumerate(temp_routes):
+
+                        if target_idx == source_idx:
+                            continue
+
+                        # Thử tất cả vị trí chèn
+                        for pos in range(len(target_route) + 1):
+
+                            candidate_route = (
+                                target_route[:pos]
+                                + [customer_id]
+                                + target_route[pos:]
+                            )
+
+                            # Tuyến mới phải hợp lệ
+                            if not self.is_route_feasible(candidate_route):
+                                continue
+
+                            # Tính mức tăng quãng đường
+                            old_distance = self.calculate_route_distance(
+                                target_route
+                            )
+
+                            new_distance = self.calculate_route_distance(
+                                candidate_route
+                            )
+
+                            distance_increase = (
+                                new_distance - old_distance
+                            )
+
+                            # Chọn vị trí tăng quãng đường ít nhất
+                            if distance_increase < best_distance_increase:
+                                best_distance_increase = distance_increase
+                                best_target_idx = target_idx
+                                best_position = pos
+
+                    # Không tìm được tuyến nào để chèn khách
+                    if best_target_idx is None:
+                        success = False
+                        break
+
+                    # Chèn khách vào tuyến tốt nhất
+                    temp_routes[best_target_idx].insert(
+                        best_position,
+                        customer_id
+                    )
+
+                # ==========================================
+                # Nếu chuyển được toàn bộ khách của tuyến nguồn
+                # thì xóa tuyến đó
+                # ==========================================
+                if success:
+                    del temp_routes[source_idx]
+
+                    routes = temp_routes
+
+                    improved = True
+                    break
+
+        return routes
+    # Tính độ thích nghi, quãng đường và số xe cho toàn bộ quần thể
     def cal_fitness_population(self):
         for individual in self.__population:
-            individual.fitness, individual.distance = self.cal_fitness_individualV2(individual.customerList)
+            individual.fitness, individual.distance = self.cal_fitness_individualV2(
+                individual.customerList
+            )
+
+            routes = self.individualToRoute(individual.customerList)
+            individual.vehicle_count = len(routes)
 
     # Hàm tính fitness phiên bản cũ (Giữ nguyên để tránh lỗi gọi hàm liên đới nếu có)
     def cal_fitness_individual(self, individual):
@@ -125,66 +486,46 @@ class GA:
 
         return fitness, distance
 
-    # Hàm tính fitness cải tiến V2 - Đã sửa lỗi logic tính khoảng cách, cộng trùng và tính phạt trễ giờ
+    # Tính fitness: quãng đường + phạt vi phạm thời gian, không phạt thời gian chờ
+    # Tính fitness dựa trên các tuyến hợp lệ đã được tách bởi individualToRoute
     def cal_fitness_individualV2(self, individual):
-        vehicle_load = 0  
-        elapsed_time = 0  
-        last_customer_id = 0  
-        sub_route = []  
-        fitness_penalty = 0
-        distance = 0
-        depot = self.customers[0]  
-        
-        for customer_id in individual:
-            customer = self.customers[customer_id]
+        routes = self.individualToRoute(individual)
+
+        total_distance = 0.0
+        depot = self.customers[0]
+
+        for sub_route in routes:
+            if len(sub_route) == 0:
+                continue
+
+            last_customer_id = 0
+
+            # Tính quãng đường đi qua từng khách trong tuyến
+            for customer_id in sub_route:
+                customer = self.customers[customer_id]
+                last_customer = self.customers[last_customer_id]
+
+                moving_distance = np.linalg.norm(
+                    customer.xy_coord - last_customer.xy_coord
+                )
+
+                total_distance += moving_distance
+                last_customer_id = customer_id
+
+            # Khách cuối quay về kho
             last_customer = self.customers[last_customer_id]
-            demand = customer.demand
-            update_vehicle_load = vehicle_load + demand
 
-            service_time = customer.serviceTime
-            moving_time = np.linalg.norm(customer.xy_coord - last_customer.xy_coord)
-            arrive_time = elapsed_time + moving_time
+            return_distance = np.linalg.norm(
+                last_customer.xy_coord - depot.xy_coord
+            )
 
-            waiting_time = max(customer.readyTime - self._M - arrive_time, 0)
-            delay_time = max(arrive_time - customer.dueTime - self._M, 0)
-            return_time = np.linalg.norm(customer.xy_coord - depot.xy_coord)
+            total_distance += return_distance
 
-            update_elapsed_time = arrive_time + service_time + waiting_time + return_time
+        # Vì individualToRoute đã đảm bảo ràng buộc,
+        # fitness hiện tại chính là tổng quãng đường.
+        total_fitness = total_distance
 
-            if (update_vehicle_load <= self._vehcicle_capacity) and (update_elapsed_time <= depot.dueTime + self._M):
-                vehicle_load = update_vehicle_load
-                elapsed_time = update_elapsed_time - return_time
-                sub_route.append(customer_id)
-                distance += moving_time
-                fitness_penalty += waiting_time + delay_time
-            else:
-                # Xe trước quay từ điểm cuối cùng của nó về kho
-                return_from_last = np.linalg.norm(last_customer.xy_coord - depot.xy_coord)
-                distance += return_from_last
-                
-                # Xe mới xuất phát đi từ kho tới khách hàng hiện tại
-                time_to_new = np.linalg.norm(depot.xy_coord - customer.xy_coord)
-                distance += time_to_new
-                
-                sub_route = [customer_id]
-                vehicle_load = demand
-                
-                arrive_time = time_to_new  
-                waiting_time = max(customer.readyTime - self._M - arrive_time, 0)
-                delay_time = max(arrive_time - customer.dueTime - self._M, 0)
-                
-                fitness_penalty += waiting_time + delay_time
-                elapsed_time = arrive_time + service_time + waiting_time
-
-            last_customer_id = customer_id
-
-        if len(sub_route) > 0:
-            return_to_depot = np.linalg.norm(self.customers[last_customer_id].xy_coord - depot.xy_coord)
-            distance += return_to_depot
-
-        # Tổng fitness = Tổng quãng đường + Các chi phí phạt thời gian chờ/muộn
-        total_fitness = distance + fitness_penalty
-        return total_fitness, distance
+        return total_fitness, total_distance
 
     def cal_fitness_sub_route(self, route):
         sub_route_result = []
@@ -193,11 +534,25 @@ class GA:
             sub_route_result.append(fitness)
         return sub_route_result
 
-    # Sắp xếp và chọn lọc thế hệ (Elite Selection kết hợp loại bớt cá thể kém để tránh bão hòa)
+    # Chọn cá thể tốt: ưu tiên ít xe trước, sau đó mới ưu tiên quãng đường ngắn
     def selection(self):
-        self.__population.sort(key=lambda x: x.fitness)
-        positionToDel = math.floor(self._individual * 0.5)  # Giữ lại 50% quần thể tốt nhất làm bố mẹ
-        del self.__population[positionToDel:]
+        # Sắp xếp: ít xe hơn tốt hơn,
+        # nếu cùng số xe thì quãng đường ngắn hơn tốt hơn
+        self.__population.sort(
+            key=lambda x: (
+                x.vehicle_count,
+                x.distance
+            )
+        )
+
+        # Số cá thể tốt được giữ lại làm bố mẹ
+        number_survivors = max(
+            2,
+            math.floor(self._individual * self._conserve_rate)
+        )
+
+        # Chỉ giữ lại các cá thể tốt nhất
+        self.__population = self.__population[:number_survivors]
 
     def SinglePointCrossover(self, dad, mom):
         pos1 = random.randrange(len(mom))
@@ -593,28 +948,48 @@ class GA:
         child_new[pos1:pos2+1] = np.flip(child_new[pos1:pos2+1])
         return child_new
 
+    # Sinh thế hệ mới: lai ghép và đột biến được xử lý độc lập
     def hybird(self):
-        index = math.floor(self._conserve_rate * self._individual)
         if len(self.__population) < 2:
-            return  # Tránh crash nếu quần thể quá nhỏ
+            return
 
-        while (len(self.__population) < self._individual):
-            hybird_rate = random.random()
-            dad, mom = random.sample(self.__population, 2) # Cho phép lấy ngẫu nhiên trong phần giữ lại làm cha mẹ
+        while len(self.__population) < self._individual:
 
-            if (hybird_rate > self._crossover_rate):
-                continue
+            # Chọn ngẫu nhiên 2 cá thể bố mẹ
+            dad, mom = random.sample(self.__population, 2)
 
-            gene_child_1, gene_child_2 = self.STPBCrossover(np.copy(dad.customerList), np.copy(mom.customerList))
+            # ==========================================
+            # 1. Lai ghép (Crossover - trao đổi gen)
+            # ==========================================
+            if random.random() <= self._crossover_rate:
+                gene_child_1, gene_child_2 = self.STPBCrossover(
+                    np.copy(dad.customerList),
+                    np.copy(mom.customerList)
+                )
+            else:
+                # Không lai ghép thì sao chép bố mẹ
+                gene_child_1 = np.copy(dad.customerList)
+                gene_child_2 = np.copy(mom.customerList)
 
-            if hybird_rate <= self._mutation_rate:
+            # ==========================================
+            # 2. Đột biến con thứ nhất
+            # ==========================================
+            if random.random() <= self._mutation_rate:
                 gene_child_1 = self.mutation(gene_child_1)
+
+            # ==========================================
+            # 3. Đột biến con thứ hai
+            # ==========================================
+            if random.random() <= self._mutation_rate:
                 gene_child_2 = self.mutation(gene_child_2)
 
+            # ==========================================
+            # 4. Thêm con vào quần thể
+            # ==========================================
             child1 = Individual(customerList=gene_child_1)
             self.__population.append(child1)
 
-            if (len(self.__population) < self._individual):
+            if len(self.__population) < self._individual:
                 child2 = Individual(customerList=gene_child_2)
                 self.__population.append(child2)
 
@@ -640,12 +1015,61 @@ class GA:
         self.best_fitness_pM = -1
         self.best_fitness_pD = -1
 
+    # Tối ưu từng cụm bằng GA, sau đó chuyển khách giữa các tuyến 
     def fit_allClusters(self, clusters):
+
+        # Bước 1: Ghép lại các cụm có thể ghép
         clusters = self.re_cluster_by_timewindow(clusters)
+
+        # Bước 2: GA tối ưu từng cụm
         for i in range(len(clusters)):
             self.fit(cluster=clusters[i])
-        return self.best_fitness_global, self.best_route_global, self.best_distance_global, self.route_count_global, self.process_time
 
+        # ==========================================
+        # Bước 3: Gom tất cả tuyến từ các cụm
+        # ==========================================
+        all_routes = []
+
+        for cluster_routes in self.best_route_global:
+            for route in cluster_routes:
+                all_routes.append(list(route))
+
+        # ==========================================
+        # Bước 4: Chuyển khách giữa các tuyến
+        # để cố gắng giảm số xe
+        # ==========================================
+        improved_routes = self.relocate_routes(all_routes)
+
+        # ==========================================
+        # Bước 5: Dùng 2-opt để giảm quãng đường
+        # trong từng tuyến sau khi đã giảm số xe
+        # ==========================================
+        optimized_routes = []
+
+        for route in improved_routes:
+            optimized_route = self.two_opt_route(route)
+            optimized_routes.append(optimized_route)
+
+        # ==========================================
+        # Bước 6: Tính lại tổng số xe và quãng đường
+        # ==========================================
+        total_distance = sum(
+            self.calculate_route_distance(route)
+            for route in optimized_routes
+        )
+
+        self.best_route_global = optimized_routes
+        self.route_count_global = len(optimized_routes)
+        self.best_distance_global = total_distance
+        self.best_fitness_global = total_distance
+
+        return (
+            self.best_fitness_global,
+            self.best_route_global,
+            self.best_distance_global,
+            self.route_count_global,
+            self.process_time
+        )
 
 # --- HÀM MAIN CHẠY THỬ NGHIỆM ---
 if __name__ == "__main__":

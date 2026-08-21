@@ -17,7 +17,7 @@ if __name__ == "__main__":
     algorithms = ['GA']  # 'GA','PSO','ACO',
     # ===============================Thiết lập các thông số===============================
     # Thông số VRPTW
-    VEHCICLE_CAPACITY = 1000  # Trọng tải tối đa của 1 xe
+    VEHCICLE_CAPACITY = 200  # Trọng tải tối đa của 1 xe
     M = 0  # Sai số trong cửa sổ thời gian
     # Thông số chạy K-means
     N_CLUSTER = 10  # Khuyến nghị: Giảm từ 20 xuống 8 cụm cho 100 khách hàng để GA tối ưu tốt hơn
@@ -29,7 +29,7 @@ if __name__ == "__main__":
     GENERATION = 100  
     CROSSOVER_RATE = 0.8  
     MUTATION_RATE = 0.15  
-    CONSERVE_RATE = 0.1  
+    CONSERVE_RATE = 0.3 
     # Thông số chạy PSO
     NUM_PARTICLES = 150  
     MAX_ITER_PSO = 150  
@@ -49,7 +49,7 @@ if __name__ == "__main__":
     DATA_ID = None  # File dữ liệu cụ thể
     DATA_NAME = "C1"  # Bộ dữ liệu
     DATA_NUMBER_CUS = "100" 
-    RUN_TIMES = 10  
+    RUN_TIMES = 10
     EXCEL_FILE = None  
     FILE_EXCEL_PATH = "result/"
     FILE_NAME = "_Test" 
