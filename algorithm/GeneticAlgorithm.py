@@ -55,10 +55,10 @@ class GA:
     # Xây dựng tuyến xe theo ràng buộc VRPTW Solomon: tải trọng, cửa sổ thời gian và thời gian quay về kho (Cong_1)
     def individualToRoute(self, individual):
         routes = []
-
+        depot = self.customers[0]
         current_route = []
         vehicle_load = 0
-        current_time = 0
+        current_time = float(depot.readyTime)
         last_customer_id = 0
 
         depot = self.customers[0]
@@ -146,7 +146,7 @@ class GA:
                 # ==========================================
                 current_route = []
                 vehicle_load = 0
-                current_time = 0
+                current_time = float(depot.readyTime)
                 last_customer_id = 0
 
                 # Tính lại cho khách hiện tại từ depot
@@ -155,7 +155,7 @@ class GA:
                     - customer.xy_coord
                 )
 
-                arrival_time = travel_time
+                arrival_time = current_time + travel_time
 
                 service_start_time = max(
                     arrival_time,
@@ -209,7 +209,7 @@ class GA:
         depot = self.customers[0]
 
         vehicle_load = 0
-        current_time = 0.0
+        current_time = float(depot.readyTime)
         last_customer_id = 0
 
         for customer_id in route:
@@ -272,6 +272,100 @@ class GA:
 
         return True
 
+    # ==================== Kiểm tra toàn bộ nghiệm cuối ====================
+    def validate_solution(self, routes):
+
+        all_customers = []
+        invalid_routes = []
+
+        # ==========================================
+        # 1. Kiểm tra từng route có hợp lệ không
+        # ==========================================
+        for idx, route in enumerate(routes):
+
+            if not self.is_route_feasible(route):
+                invalid_routes.append(idx + 1)
+
+            for customer_id in route:
+                all_customers.append(int(customer_id))
+
+        # ==========================================
+        # 2. Kiểm tra khách hàng bị trùng
+        # ==========================================
+        duplicate_customers = []
+
+        unique_customers = set()
+
+        for customer_id in all_customers:
+            if customer_id in unique_customers:
+                duplicate_customers.append(customer_id)
+            else:
+                unique_customers.add(customer_id)
+
+        duplicate_customers = sorted(
+            list(set(duplicate_customers))
+        )
+
+        # ==========================================
+        # 3. Kiểm tra khách bị thiếu
+        #
+        # customers[0] là depot
+        # customer thật từ 1 -> N
+        # ==========================================
+        expected_customers = set(
+            range(1, len(self.customers))
+        )
+
+        actual_customers = set(all_customers)
+
+        missing_customers = sorted(
+            list(
+                expected_customers
+                - actual_customers
+            )
+        )
+
+        # ==========================================
+        # 4. Kiểm tra khách ngoài phạm vi
+        # ==========================================
+        extra_customers = sorted(
+            list(
+                actual_customers
+                - expected_customers
+            )
+        )
+
+        # ==========================================
+        # 5. Kiểm tra tổng số lần phục vụ
+        # ==========================================
+        expected_count = (
+            len(self.customers) - 1
+        )
+
+        actual_count = len(
+            all_customers
+        )
+
+        # ==========================================
+        # 6. Kết luận
+        # ==========================================
+        is_valid = (
+            len(invalid_routes) == 0
+            and len(duplicate_customers) == 0
+            and len(missing_customers) == 0
+            and len(extra_customers) == 0
+            and actual_count == expected_count
+        )
+
+        return {
+            "is_valid": is_valid,
+            "invalid_routes": invalid_routes,
+            "duplicate_customers": duplicate_customers,
+            "missing_customers": missing_customers,
+            "extra_customers": extra_customers,
+            "expected_customer_count": expected_count,
+            "actual_customer_count": actual_count
+        }
     # Tính tổng quãng đường của một tuyến 
     def calculate_route_distance(self, route):
         if len(route) == 0:
@@ -443,6 +537,185 @@ class GA:
                     routes = temp_routes
 
                     improved = True
+                    break
+
+        return routes
+
+    # Loại bỏ tuyến bằng cách phân bổ lại toàn bộ khách sang các tuyến khác
+    def eliminate_routes(self, routes):
+        routes = [list(route) for route in routes]
+
+        improved = True
+
+        while improved:
+            improved = False
+
+            # Ưu tiên thử loại các tuyến ít khách trước
+            route_order = sorted(
+                range(len(routes)),
+                key=lambda i: len(routes[i])
+            )
+
+            for source_idx in route_order:
+
+                # Bảo vệ trường hợp danh sách route đã thay đổi
+                if source_idx >= len(routes):
+                    continue
+
+                source_route = routes[source_idx]
+
+                if len(source_route) == 0:
+                    continue
+
+                # Tạo bản sao để thử nghiệm.
+                # Chỉ cập nhật routes thật khi chuyển được toàn bộ khách.
+                candidate_routes = [
+                    list(route)
+                    for route in routes
+                ]
+
+                customers_to_move = list(source_route)
+
+                # Xóa tạm tuyến nguồn.
+                # Sau đó tìm nơi chèn từng khách.
+                del candidate_routes[source_idx]
+
+                success = True
+
+                for customer_id in customers_to_move:
+
+                    best_target_idx = None
+                    best_position = None
+                    best_distance_increase = float("inf")
+
+                    # ==========================================
+                    # Thử tất cả các tuyến còn lại
+                    # ==========================================
+                    for target_idx, target_route in enumerate(candidate_routes):
+
+                        # Thử tất cả vị trí có thể chèn khách
+                        for pos in range(len(target_route) + 1):
+
+                            new_route = (
+                                target_route[:pos]
+                                + [customer_id]
+                                + target_route[pos:]
+                            )
+
+                            # Tuyến mới phải thỏa ràng buộc VRPTW
+                            if not self.is_route_feasible(new_route):
+                                continue
+
+                            old_distance = self.calculate_route_distance(
+                                target_route
+                            )
+
+                            new_distance = self.calculate_route_distance(
+                                new_route
+                            )
+
+                            distance_increase = (
+                                new_distance - old_distance
+                            )
+
+                            # Chọn vị trí làm tăng quãng đường ít nhất
+                            if distance_increase < best_distance_increase:
+                                best_distance_increase = distance_increase
+                                best_target_idx = target_idx
+                                best_position = pos
+
+                    # Không thể chuyển khách này sang tuyến nào
+                    if best_target_idx is None:
+                        success = False
+                        break
+
+                    # Chèn khách vào tuyến tốt nhất tìm được
+                    candidate_routes[best_target_idx].insert(
+                        best_position,
+                        customer_id
+                    )
+
+                # ==========================================
+                # Nếu chuyển được toàn bộ khách của tuyến nguồn
+                # thì chấp nhận và giảm được 1 xe
+                # ==========================================
+                if success:
+                    routes = candidate_routes
+                    improved = True
+
+                    # Danh sách route đã thay đổi,
+                    # chạy lại từ đầu với tuyến ít khách nhất
+                    break
+
+        return routes
+    # Hoán đổi khách hàng giữa hai tuyến để cải thiện nghiệm
+    def swap_between_routes(self, routes):
+        routes = [list(route) for route in routes]
+
+        improved = True
+
+        while improved:
+            improved = False
+
+            # Duyệt từng cặp tuyến
+            for i in range(len(routes)):
+                for j in range(i + 1, len(routes)):
+
+                    route_1 = routes[i]
+                    route_2 = routes[j]
+
+                    old_distance = (
+                        self.calculate_route_distance(route_1)
+                        + self.calculate_route_distance(route_2)
+                    )
+
+                    best_route_1 = None
+                    best_route_2 = None
+                    best_distance = old_distance
+
+                    # ==========================================
+                    # Thử đổi từng khách của route 1
+                    # với từng khách của route 2
+                    # ==========================================
+                    for pos1 in range(len(route_1)):
+                        for pos2 in range(len(route_2)):
+
+                            new_route_1 = list(route_1)
+                            new_route_2 = list(route_2)
+
+                            # Hoán đổi hai khách
+                            new_route_1[pos1], new_route_2[pos2] = (
+                                new_route_2[pos2],
+                                new_route_1[pos1]
+                            )
+
+                            # Hai tuyến mới đều phải hợp lệ
+                            if not self.is_route_feasible(new_route_1):
+                                continue
+
+                            if not self.is_route_feasible(new_route_2):
+                                continue
+
+                            new_distance = (
+                                self.calculate_route_distance(new_route_1)
+                                + self.calculate_route_distance(new_route_2)
+                            )
+
+                            # Chỉ nhận nếu tổng quãng đường giảm
+                            if new_distance < best_distance - 1e-9:
+                                best_distance = new_distance
+                                best_route_1 = new_route_1
+                                best_route_2 = new_route_2
+
+                    # Nếu tìm được phép đổi tốt hơn
+                    if best_route_1 is not None:
+                        routes[i] = best_route_1
+                        routes[j] = best_route_2
+
+                        improved = True
+                        break
+
+                if improved:
                     break
 
         return routes
@@ -1015,18 +1288,23 @@ class GA:
         self.best_fitness_pM = -1
         self.best_fitness_pD = -1
 
-    # Tối ưu từng cụm bằng GA, sau đó chuyển khách giữa các tuyến 
+    # ==================== GA + Relocate + Swap + Route Elimination ====================
     def fit_allClusters(self, clusters):
 
-        # Bước 1: Ghép lại các cụm có thể ghép
+        # ==========================================
+        # Bước 1: Ghép các cụm phù hợp
+        # ==========================================
         clusters = self.re_cluster_by_timewindow(clusters)
 
+        # ==========================================
         # Bước 2: GA tối ưu từng cụm
+        # ==========================================
         for i in range(len(clusters)):
             self.fit(cluster=clusters[i])
 
         # ==========================================
-        # Bước 3: Gom tất cả tuyến từ các cụm
+        # Bước 3: Gom tất cả các tuyến từ các cụm
+        # thành một danh sách chung
         # ==========================================
         all_routes = []
 
@@ -1035,34 +1313,96 @@ class GA:
                 all_routes.append(list(route))
 
         # ==========================================
-        # Bước 4: Chuyển khách giữa các tuyến
-        # để cố gắng giảm số xe
+        # Bước 4: Relocate
+        # Chuyển khách giữa các tuyến nhằm
+        # giảm số lượng xe
         # ==========================================
-        improved_routes = self.relocate_routes(all_routes)
+        improved_routes = self.relocate_routes(
+            all_routes
+        )
 
         # ==========================================
-        # Bước 5: Dùng 2-opt để giảm quãng đường
-        # trong từng tuyến sau khi đã giảm số xe
+        # Bước 5: Swap
+        # Hoán đổi khách giữa các tuyến nhằm
+        # cải thiện cấu trúc và giảm quãng đường
         # ==========================================
-        optimized_routes = []
-
-        for route in improved_routes:
-            optimized_route = self.two_opt_route(route)
-            optimized_routes.append(optimized_route)
+        swapped_routes = self.swap_between_routes(
+            improved_routes
+        )
 
         # ==========================================
-        # Bước 6: Tính lại tổng số xe và quãng đường
+        # Bước 6: Route Elimination
+        # Sau khi Swap thay đổi cấu trúc tuyến,
+        # thử loại bỏ hoàn toàn một tuyến
+        # ==========================================
+
+        optimized_routes = self.eliminate_routes(
+            swapped_routes
+        )
+        # ==========================================
+        # Kiểm tra nghiệm cuối
+        # ==========================================
+        validation = self.validate_solution(
+            optimized_routes
+        )
+
+        print("========== KIỂM TRA NGHIỆM ==========")
+
+        print(
+            f"Hợp lệ toàn bộ: "
+            f"{validation['is_valid']}"
+        )
+
+        print(
+            f"Số khách dự kiến: "
+            f"{validation['expected_customer_count']}"
+        )
+
+        print(
+            f"Số khách thực tế: "
+            f"{validation['actual_customer_count']}"
+        )
+
+        print(
+            f"Route không hợp lệ: "
+            f"{validation['invalid_routes']}"
+        )
+
+        print(
+            f"Khách bị trùng: "
+            f"{validation['duplicate_customers']}"
+        )
+
+        print(
+            f"Khách bị thiếu: "
+            f"{validation['missing_customers']}"
+        )
+
+        print(
+            f"Khách ngoài phạm vi: "
+            f"{validation['extra_customers']}"
+        )
+
+        print("======================================")
+        # ==========================================
+        # Bước 7: Tính lại tổng quãng đường
         # ==========================================
         total_distance = sum(
             self.calculate_route_distance(route)
             for route in optimized_routes
         )
 
+        # ==========================================
+        # Bước 8: Cập nhật kết quả cuối cùng
+        # ==========================================
         self.best_route_global = optimized_routes
         self.route_count_global = len(optimized_routes)
         self.best_distance_global = total_distance
         self.best_fitness_global = total_distance
 
+        # ==========================================
+        # Bước 9: Trả kết quả
+        # ==========================================
         return (
             self.best_fitness_global,
             self.best_route_global,
