@@ -28,13 +28,14 @@ class Individual():
 # --- THUẬT TOÁN DI TRUYỀN (GA) ---
 class GA:
     def __init__(self, individual: int = 4500, generation: int = 100, crossover_rate: float = 0.8, 
-                 mutation_rate: float = 0.15, vehcicle_capacity: float = 200, conserve_rate: float = 0.1, 
-                 M: float = 50, customers: list = None):
+                 mutation_rate: float = 0.15, vehcicle_capacity: float = None, vehicle_number: int = None,
+                 conserve_rate: float = 0.1, M: float = 50, customers: list = None):
         self._individual = individual          # Số cá thể
         self._generation = generation          # Số thế hệ
         self._crossover_rate = crossover_rate  # Tỉ lệ trao đổi chéo
         self._mutation_rate = mutation_rate    # Tỉ lệ đột biến
         self._vehcicle_capacity = vehcicle_capacity  # Trọng tải của xe
+        self._vehicle_number = vehicle_number
         self._conserve_rate = conserve_rate    # Tỉ lệ bảo tồn
         self._M = M                            # Sai số thời gian
         self.customers = customers              # Dữ liệu khách hàng
@@ -203,7 +204,77 @@ class GA:
             routes.append(current_route)
 
         return routes
+    
+    def diagnose_clusters(self, clusters):
+        print("\n========== PHÂN TÍCH CLUSTER ==========")
 
+        for i, cluster in enumerate(clusters):
+            customers = [self.customers[int(c)] for c in cluster]
+
+            ready_times = [c.readyTime for c in customers]
+            due_times = [c.dueTime for c in customers]
+            demands = [c.demand for c in customers]
+
+            ready_min = min(ready_times)
+            ready_max = max(ready_times)
+            due_min = min(due_times)
+            due_max = max(due_times)
+            total_demand = sum(demands)
+
+            print(
+                f"Cluster {i + 1:02d} | "
+                f"Customers={len(cluster):2d} | "
+                f"Demand={total_demand:3d} | "
+                f"Ready={ready_min:.0f}-{ready_max:.0f} | "
+                f"Due={due_min:.0f}-{due_max:.0f}"
+            )
+
+        print("========================================\n")
+
+    def diagnose_routes(self, routes):
+        print("\n========== PHÂN TÍCH ROUTE ==========")
+
+        depot = self.customers[0]
+
+        for index, route in enumerate(routes, start=1):
+            load = 0
+            current_time = 0.0
+            last_customer_id = 0
+
+            for customer_id in route:
+                customer = self.customers[customer_id]
+                last_customer = self.customers[last_customer_id]
+
+                load += customer.demand
+
+                travel_time = np.linalg.norm(
+                    customer.xy_coord - last_customer.xy_coord
+                )
+
+                arrival_time = current_time + travel_time
+                service_start = max(arrival_time, customer.readyTime)
+
+                current_time = (
+                    service_start + customer.serviceTime
+                )
+
+                last_customer_id = customer_id
+
+            return_time = np.linalg.norm(
+                self.customers[last_customer_id].xy_coord
+                - depot.xy_coord
+            )
+
+            finish_time = current_time + return_time
+
+            print(
+                f"Route {index:02d} | "
+                f"Customers={len(route):2d} | "
+                f"Load={load:3d}/{self._vehcicle_capacity} | "
+                f"Finish={finish_time:.2f}/{depot.dueTime}"
+            )
+
+        print("=====================================\n")
     # ==================== Kiểm tra một tuyến có thỏa các ràng buộc VRPTW Solomon hay không ====================
     def is_route_feasible(self, route):
         depot = self.customers[0]
@@ -345,7 +416,13 @@ class GA:
         actual_count = len(
             all_customers
         )
+        # kiểm tra vehicle number
+        vehicle_count = len(routes)
 
+        vehicle_limit_feasible = (
+            self._vehicle_number is None
+            or vehicle_count <= self._vehicle_number
+        )
         # ==========================================
         # 6. Kết luận
         # ==========================================
@@ -355,6 +432,7 @@ class GA:
             and len(missing_customers) == 0
             and len(extra_customers) == 0
             and actual_count == expected_count
+            and vehicle_limit_feasible
         )
 
         return {
@@ -364,7 +442,10 @@ class GA:
             "missing_customers": missing_customers,
             "extra_customers": extra_customers,
             "expected_customer_count": expected_count,
-            "actual_customer_count": actual_count
+            "actual_customer_count": actual_count,
+            "vehicle_count": vehicle_count,
+            "vehicle_limit": self._vehicle_number,
+            "vehicle_limit_feasible": vehicle_limit_feasible
         }
     # Tính tổng quãng đường của một tuyến 
     def calculate_route_distance(self, route):
@@ -432,6 +513,9 @@ class GA:
                     break
 
         return best_route
+
+    def two_opt_all_routes(self, routes):
+        return [self.two_opt_route(route) for route in routes]
 
     # Chuyển khách giữa các tuyến để giảm số lượng xe, loại bỏ hoàn toàn một tuyến nếu có thể.
     def relocate_routes(self, routes):
@@ -540,111 +624,573 @@ class GA:
                     break
 
         return routes
+    
+    def best_insertion(self, customer_id, routes):
+        best_route_idx = None
+        best_position = None
+        best_cost = float("inf")
 
-    # Loại bỏ tuyến bằng cách phân bổ lại toàn bộ khách sang các tuyến khác
-    def eliminate_routes(self, routes):
+        for route_idx, route in enumerate(routes):
+            old_distance = self.calculate_route_distance(route)
+
+            for pos in range(len(route) + 1):
+                new_route = route[:pos] + [customer_id] + route[pos:]
+
+                if not self.is_route_feasible(new_route):
+                    continue
+
+                new_distance = self.calculate_route_distance(new_route)
+                cost = new_distance - old_distance
+
+                if cost < best_cost:
+                    best_cost = cost
+                    best_route_idx = route_idx
+                    best_position = pos
+
+        return best_route_idx, best_position
+
+    def get_best_insertions(self, customer_id, routes, max_options=5):
+        options = []
+
+        for route_idx, route in enumerate(routes):
+            old_distance = self.calculate_route_distance(route)
+
+            for position in range(len(route) + 1):
+                new_route = (
+                    route[:position]
+                    + [customer_id]
+                    + route[position:]
+                )
+
+                if not self.is_route_feasible(new_route):
+                    continue
+
+                new_distance = self.calculate_route_distance(new_route)
+                increase = new_distance - old_distance
+
+                options.append(
+                    (increase, route_idx, position)
+                )
+
+        options.sort(key=lambda x: x[0])
+
+        return options[:max_options]
+
+    def backtrack_eliminate(
+        self,
+        customers_to_move,
+        routes,
+        customer_index=0,
+        max_options=5,
+        max_nodes=3000,
+        counter=None
+    ):
+
+        if counter is None:
+            counter = [0]
+
+        # Giới hạn search để tránh chạy quá lâu
+        if counter[0] >= max_nodes:
+            return None
+
+        counter[0] += 1
+
+        # ==========================================
+        # Đã chuyển hết customer
+        # ==========================================
+        if customer_index >= len(customers_to_move):
+            return [list(route) for route in routes]
+
+        customer_id = customers_to_move[customer_index]
+
+        # ==========================================
+        # LEVEL 0: thử nhiều direct insertion
+        # ==========================================
+        insertion_options = self.get_best_insertions(
+            customer_id,
+            routes,
+            max_options=max_options
+        )
+
+        for _, route_idx, position in insertion_options:
+
+            new_routes = [
+                list(route)
+                for route in routes
+            ]
+
+            new_routes[route_idx].insert(
+                position,
+                customer_id
+            )
+
+            result = self.backtrack_eliminate(
+                customers_to_move,
+                new_routes,
+                customer_index + 1,
+                max_options,
+                max_nodes,
+                counter
+            )
+
+            if result is not None:
+                return result
+
+        # ==========================================
+        # LEVEL 1: 1-ejection
+        # ==========================================
+        ejected_routes = self.try_ejection_insert(
+            customer_id,
+            routes
+        )
+
+        if ejected_routes is not None:
+
+            result = self.backtrack_eliminate(
+                customers_to_move,
+                ejected_routes,
+                customer_index + 1,
+                max_options,
+                max_nodes,
+                counter
+            )
+
+            if result is not None:
+                return result
+
+        # ==========================================
+        # LEVEL 2: 2-ejection
+        # ==========================================
+        double_ejected_routes = self.try_double_ejection_insert(
+            customer_id,
+            routes
+        )
+
+        if double_ejected_routes is not None:
+
+            result = self.backtrack_eliminate(
+                customers_to_move,
+                double_ejected_routes,
+                customer_index + 1,
+                max_options,
+                max_nodes,
+                counter
+            )
+
+            if result is not None:
+                return result
+
+        # ==========================================
+        # Không tìm được phương án
+        # → quay lui
+        # ==========================================
+        return None
+
+    def try_ejection_insert(self, customer_id, routes):
+        best_routes = None
+        best_cost = float("inf")
+
+        for target_idx, target_route in enumerate(routes):
+            old_target_distance = self.calculate_route_distance(target_route)
+
+            for eject_pos in range(len(target_route)):
+                ejected_customer = target_route[eject_pos]
+                reduced_route = target_route[:eject_pos] + target_route[eject_pos + 1:]
+
+                for insert_pos in range(len(reduced_route) + 1):
+                    new_target = (
+                        reduced_route[:insert_pos]
+                        + [customer_id]
+                        + reduced_route[insert_pos:]
+                    )
+
+                    if not self.is_route_feasible(new_target):
+                        continue
+
+                    temp_routes = [list(route) for route in routes]
+                    temp_routes[target_idx] = new_target
+
+                    other_routes = [
+                        route for i, route in enumerate(temp_routes)
+                        if i != target_idx
+                    ]
+
+                    route_idx, position = self.best_insertion(
+                        ejected_customer, other_routes
+                    )
+
+                    if route_idx is None:
+                        continue
+
+                    other_routes[route_idx].insert(position, ejected_customer)
+
+                    candidate_routes = []
+                    other_idx = 0
+
+                    for i in range(len(temp_routes)):
+                        if i == target_idx:
+                            candidate_routes.append(new_target)
+                        else:
+                            candidate_routes.append(other_routes[other_idx])
+                            other_idx += 1
+
+                    new_target_distance = self.calculate_route_distance(new_target)
+                    cost = new_target_distance - old_target_distance
+
+                    if cost < best_cost:
+                        best_cost = cost
+                        best_routes = candidate_routes
+
+        return best_routes
+
+    def try_double_ejection_insert(self, customer_id, routes):
         routes = [list(route) for route in routes]
+
+        # ==========================================
+        # Thử từng route làm route đích
+        # ==========================================
+        for target_idx, target_route in enumerate(routes):
+
+            if len(target_route) < 2:
+                continue
+
+            # ==========================================
+            # Chọn 2 customer để eject
+            # ==========================================
+            for i in range(len(target_route) - 1):
+                for j in range(i + 1, len(target_route)):
+
+                    ejected_1 = target_route[i]
+                    ejected_2 = target_route[j]
+
+                    # Route sau khi lấy 2 customer ra
+                    reduced_route = [
+                        c for k, c in enumerate(target_route)
+                        if k != i and k != j
+                    ]
+
+                    # ==========================================
+                    # Thử mọi vị trí cho customer mới
+                    # ==========================================
+                    for insert_pos in range(len(reduced_route) + 1):
+
+                        new_target = (
+                            reduced_route[:insert_pos]
+                            + [customer_id]
+                            + reduced_route[insert_pos:]
+                        )
+
+                        if not self.is_route_feasible(new_target):
+                            continue
+
+                        candidate_routes = [
+                            list(route)
+                            for route in routes
+                        ]
+
+                        candidate_routes[target_idx] = new_target
+
+                        # ==========================================
+                        # Chèn lại hai customer bị eject
+                        # Không cho chèn lại vào target route
+                        # ==========================================
+                        other_indices = [
+                            k for k in range(len(candidate_routes))
+                            if k != target_idx
+                        ]
+
+                        temp_routes = [
+                            list(candidate_routes[k])
+                            for k in other_indices
+                        ]
+
+                        # Thử cả hai thứ tự
+                        ejection_orders = [
+                            [ejected_1, ejected_2],
+                            [ejected_2, ejected_1]
+                        ]
+
+                        for order in ejection_orders:
+
+                            working_routes = [
+                                list(route)
+                                for route in temp_routes
+                            ]
+
+                            success = True
+
+                            for ejected_customer in order:
+
+                                route_idx, position = self.best_insertion(
+                                    ejected_customer,
+                                    working_routes
+                                )
+
+                                if route_idx is None:
+                                    success = False
+                                    break
+
+                                working_routes[route_idx].insert(
+                                    position,
+                                    ejected_customer
+                                )
+
+                            if not success:
+                                continue
+
+                            # ==================================
+                            # Ghép lại đúng vị trí các route
+                            # ==================================
+                            result_routes = [
+                                list(route)
+                                for route in candidate_routes
+                            ]
+
+                            for local_idx, original_idx in enumerate(other_indices):
+                                result_routes[original_idx] = working_routes[local_idx]
+
+                            # Kiểm tra an toàn cuối cùng
+                            if all(
+                                self.is_route_feasible(route)
+                                for route in result_routes
+                            ):
+                                return result_routes
+
+        return None
+    
+    def eliminate_routes(self, routes):
+
+        routes = [
+            list(route)
+            for route in routes
+        ]
 
         improved = True
 
         while improved:
+
             improved = False
 
-            # Ưu tiên thử loại các tuyến ít khách trước
+            # ==========================================
+            # Ưu tiên route nhỏ + demand thấp
+            # ==========================================
             route_order = sorted(
                 range(len(routes)),
-                key=lambda i: len(routes[i])
+                key=lambda i: (
+                    len(routes[i]),
+                    sum(
+                        self.customers[c].demand
+                        for c in routes[i]
+                    )
+                )
             )
 
             for source_idx in route_order:
 
-                # Bảo vệ trường hợp danh sách route đã thay đổi
                 if source_idx >= len(routes):
                     continue
 
                 source_route = routes[source_idx]
 
-                if len(source_route) == 0:
+                if not source_route:
                     continue
 
-                # Tạo bản sao để thử nghiệm.
-                # Chỉ cập nhật routes thật khi chuyển được toàn bộ khách.
-                candidate_routes = [
+                # Các route còn lại
+                base_routes = [
                     list(route)
-                    for route in routes
+                    for i, route in enumerate(routes)
+                    if i != source_idx
                 ]
 
-                customers_to_move = list(source_route)
+                # ==========================================
+                # Hardest-first
+                #
+                # Khách có ít vị trí chèn khả thi nhất
+                # được xử lý trước
+                # ==========================================
+                hardest_first = sorted(
+                    source_route,
+                    key=lambda c: len(
+                        self.get_best_insertions(
+                            c,
+                            base_routes,
+                            max_options=1000
+                        )
+                    )
+                )
 
-                # Xóa tạm tuyến nguồn.
-                # Sau đó tìm nơi chèn từng khách.
-                del candidate_routes[source_idx]
+                # ==========================================
+                # Các thứ tự thử
+                # ==========================================
+                customer_orders = [
 
-                success = True
+                    # 1. Khó chèn nhất trước
+                    hardest_first,
 
-                for customer_id in customers_to_move:
+                    # 2. Due time sớm
+                    sorted(
+                        source_route,
+                        key=lambda c:
+                        self.customers[c].dueTime
+                    ),
 
-                    best_target_idx = None
-                    best_position = None
-                    best_distance_increase = float("inf")
+                    # 3. Ready time sớm
+                    sorted(
+                        source_route,
+                        key=lambda c:
+                        self.customers[c].readyTime
+                    ),
 
-                    # ==========================================
-                    # Thử tất cả các tuyến còn lại
-                    # ==========================================
-                    for target_idx, target_route in enumerate(candidate_routes):
+                    # 4. Demand lớn
+                    sorted(
+                        source_route,
+                        key=lambda c:
+                        self.customers[c].demand,
+                        reverse=True
+                    ),
 
-                        # Thử tất cả vị trí có thể chèn khách
-                        for pos in range(len(target_route) + 1):
+                    # 5. Thứ tự hiện tại
+                    list(source_route),
 
-                            new_route = (
-                                target_route[:pos]
-                                + [customer_id]
-                                + target_route[pos:]
-                            )
+                    # 6. Thứ tự ngược
+                    list(reversed(source_route))
+                ]
 
-                            # Tuyến mới phải thỏa ràng buộc VRPTW
-                            if not self.is_route_feasible(new_route):
-                                continue
+                route_eliminated = False
 
-                            old_distance = self.calculate_route_distance(
-                                target_route
-                            )
+                # ==========================================
+                # Thử từng customer order
+                # ==========================================
+                for customers_to_move in customer_orders:
 
-                            new_distance = self.calculate_route_distance(
-                                new_route
-                            )
+                    candidate_routes = [
+                        list(route)
+                        for route in base_routes
+                    ]
 
-                            distance_increase = (
-                                new_distance - old_distance
-                            )
+                    result = self.backtrack_eliminate(
+                        customers_to_move,
+                        candidate_routes,
 
-                            # Chọn vị trí làm tăng quãng đường ít nhất
-                            if distance_increase < best_distance_increase:
-                                best_distance_increase = distance_increase
-                                best_target_idx = target_idx
-                                best_position = pos
+                        # thử tối đa 5 direct insertion/customer
+                        max_options=5,
 
-                    # Không thể chuyển khách này sang tuyến nào
-                    if best_target_idx is None:
-                        success = False
-                        break
-
-                    # Chèn khách vào tuyến tốt nhất tìm được
-                    candidate_routes[best_target_idx].insert(
-                        best_position,
-                        customer_id
+                        # giới hạn số node search
+                        max_nodes=3000
                     )
 
-                # ==========================================
-                # Nếu chuyển được toàn bộ khách của tuyến nguồn
-                # thì chấp nhận và giảm được 1 xe
-                # ==========================================
-                if success:
-                    routes = candidate_routes
-                    improved = True
+                    # ==========================================
+                    # Xóa route thành công
+                    # ==========================================
+                    if result is not None:
 
-                    # Danh sách route đã thay đổi,
-                    # chạy lại từ đầu với tuyến ít khách nhất
+                        # Kiểm tra an toàn
+                        if not all(
+                            self.is_route_feasible(route)
+                            for route in result
+                        ):
+                            continue
+
+                        routes = result
+
+                        improved = True
+                        route_eliminated = True
+
+                        break
+
+                # Sau khi xóa một route:
+                # tính route_order lại từ đầu
+                if route_eliminated:
+                    break
+
+        return routes
+
+    def optimize_route_order(self, route):
+        route = list(route)
+
+        if len(route) < 3:
+            return route
+
+        best_route = route
+        best_distance = self.calculate_route_distance(route)
+        improved = True
+
+        while improved:
+            improved = False
+
+            for i in range(len(best_route) - 1):
+                for j in range(i + 1, len(best_route)):
+                    new_route = list(best_route)
+                    customer = new_route.pop(i)
+                    new_route.insert(j, customer)
+
+                    if not self.is_route_feasible(new_route):
+                        continue
+
+                    new_distance = self.calculate_route_distance(new_route)
+
+                    if new_distance < best_distance - 1e-9:
+                        best_route = new_route
+                        best_distance = new_distance
+                        improved = True
+                        break
+
+                if improved:
+                    break
+
+        return best_route
+    def optimize_all_route_orders(self, routes):
+        return [
+            self.optimize_route_order(route)
+            for route in routes
+        ]
+
+    def two_opt_star(self, routes):
+        routes = [list(route) for route in routes]
+        improved = True
+
+        while improved:
+            improved = False
+
+            for i in range(len(routes)):
+                for j in range(i + 1, len(routes)):
+                    route_1 = routes[i]
+                    route_2 = routes[j]
+
+                    old_distance = self.calculate_route_distance(route_1)
+                    old_distance += self.calculate_route_distance(route_2)
+
+                    best_route_1 = None
+                    best_route_2 = None
+                    best_distance = old_distance
+
+                    for cut1 in range(1, len(route_1)):
+                        for cut2 in range(1, len(route_2)):
+                            new_route_1 = route_1[:cut1] + route_2[cut2:]
+                            new_route_2 = route_2[:cut2] + route_1[cut1:]
+
+                            if not new_route_1 or not new_route_2:
+                                continue
+                            if not self.is_route_feasible(new_route_1):
+                                continue
+                            if not self.is_route_feasible(new_route_2):
+                                continue
+
+                            new_distance = self.calculate_route_distance(new_route_1)
+                            new_distance += self.calculate_route_distance(new_route_2)
+
+                            if new_distance < best_distance - 1e-9:
+                                best_distance = new_distance
+                                best_route_1 = new_route_1
+                                best_route_2 = new_route_2
+
+                    if best_route_1 is not None:
+                        routes[i] = best_route_1
+                        routes[j] = best_route_2
+                        improved = True
+                        break
+
+                if improved:
                     break
 
         return routes
@@ -713,6 +1259,60 @@ class GA:
                         routes[j] = best_route_2
 
                         improved = True
+                        break
+
+                if improved:
+                    break
+
+        return routes
+
+    def relocate_for_distance(self, routes):
+        routes = [list(route) for route in routes]
+        improved = True
+
+        while improved:
+            improved = False
+
+            for source_idx in range(len(routes)):
+                if len(routes[source_idx]) <= 1:
+                    continue
+
+                for pos in range(len(routes[source_idx])):
+                    customer_id = routes[source_idx][pos]
+
+                    for target_idx in range(len(routes)):
+                        if target_idx == source_idx:
+                            continue
+
+                        old_source = routes[source_idx]
+                        old_target = routes[target_idx]
+                        new_source = old_source[:pos] + old_source[pos + 1:]
+
+                        if not self.is_route_feasible(new_source):
+                            continue
+
+                        old_distance = self.calculate_route_distance(old_source)
+                        old_distance += self.calculate_route_distance(old_target)
+
+                        for insert_pos in range(len(old_target) + 1):
+                            new_target = old_target[:insert_pos] + [customer_id] + old_target[insert_pos:]
+
+                            if not self.is_route_feasible(new_target):
+                                continue
+
+                            new_distance = self.calculate_route_distance(new_source)
+                            new_distance += self.calculate_route_distance(new_target)
+
+                            if new_distance < old_distance - 1e-9:
+                                routes[source_idx] = new_source
+                                routes[target_idx] = new_target
+                                improved = True
+                                break
+
+                        if improved:
+                            break
+
+                    if improved:
                         break
 
                 if improved:
@@ -1166,42 +1766,128 @@ class GA:
         return sort_cluster
 
     def re_cluster_by_timewindow(self, clusters):
-        def check_concatenate(cluster1, cluster2):
-            total_cluster = np.concatenate((cluster1, cluster2), axis=0)
-            check = sum([self.customers[i].serviceTime for i in total_cluster])
-            check_capacity = sum([self.customers[i].demand for i in total_cluster])
 
-            if check_capacity > self._vehcicle_capacity:
-                return False
-                
-            cluster1_coords = [self.customers[i].xy_coord for i in cluster1]
-            cluster2_coords = [self.customers[i].xy_coord for i in cluster2]
-            total_cluster_coords = np.concatenate((cluster1_coords, cluster2_coords), axis=0)
+        working_clusters = [
+            np.asarray(cluster, dtype=int)
+            for cluster in clusters if len(cluster) > 0
+        ]
 
-            distance = distance_cdist(total_cluster_coords, total_cluster_coords, metric='euclidean')
-            aver_dist = np.mean(distance[np.nonzero(distance)]) if np.count_nonzero(distance) > 0 else 0
+        if len(working_clusters) <= 1:
+            return working_clusters
 
-            distance_to_depot = distance_cdist(total_cluster_coords, [self.customers[0].xy_coord], metric='euclidean')
-            avg_distance_to_depot = np.min(distance_to_depot)
-            
-            check += 2 * avg_distance_to_depot + (len(total_cluster) - 1) * aver_dist
-            return check <= self.customers[0].dueTime
-        
-        def concatenate_arrays(array, index1, index2):
-            return [np.concatenate((array[index1], array[index2])).tolist()] + [array[i] for i in range(len(array)) if i != index1 and i != index2]
-            
-        i = 0
-        while i < len(clusters) - 1:
-            j = i + 1
-            while j < len(clusters):
-                if check_concatenate(clusters[i], clusters[j]):
-                    clusters = concatenate_arrays(clusters, i, j)
-                    j = i + 1  
-                else:
-                    j += 1  
-            i += 1
-        return clusters
+        def get_cluster_info(cluster):
+            coords = np.array(
+                [self.customers[i].xy_coord for i in cluster],
+                dtype=float
+            )
 
+            ready_times = np.array(
+                [self.customers[i].readyTime for i in cluster],
+                dtype=float
+            )
+
+            due_times = np.array(
+                [self.customers[i].dueTime for i in cluster],
+                dtype=float
+            )
+
+            time_midpoints = (ready_times + due_times) / 2.0
+
+            spatial_center = np.mean(coords, axis=0)
+            temporal_center = np.mean(time_midpoints)
+
+            return spatial_center, temporal_center
+
+        def cluster_distance(cluster1, cluster2):
+            spatial1, temporal1 = get_cluster_info(cluster1)
+            spatial2, temporal2 = get_cluster_info(cluster2)
+
+            spatial_distance = np.linalg.norm(
+                spatial1 - spatial2
+            )
+
+            temporal_distance = abs(
+                temporal1 - temporal2
+            )
+
+            return spatial_distance, temporal_distance
+
+        spatial_distances = []
+        temporal_distances = []
+
+        for i in range(len(working_clusters)):
+            for j in range(i + 1, len(working_clusters)):
+                spatial, temporal = cluster_distance(
+                    working_clusters[i],
+                    working_clusters[j]
+                )
+
+                spatial_distances.append(spatial)
+                temporal_distances.append(temporal)
+
+        if not spatial_distances:
+            return working_clusters
+
+        spatial_threshold = np.median(spatial_distances)
+        temporal_threshold = np.median(temporal_distances)
+
+        if spatial_threshold <= 0:
+            spatial_threshold = 1.0
+
+        if temporal_threshold <= 0:
+            temporal_threshold = 1.0
+
+        def merge_score(cluster1, cluster2):
+            spatial, temporal = cluster_distance(
+                cluster1,
+                cluster2
+            )
+
+            spatial_score = spatial / spatial_threshold
+            temporal_score = temporal / temporal_threshold
+
+            return 0.5 * spatial_score + 0.5 * temporal_score
+
+        initial_count = len(working_clusters)
+
+        minimum_count = max(
+            1,
+            int(np.ceil(initial_count * 0.7))
+        )
+
+        while len(working_clusters) > minimum_count:
+            best_pair = None
+            best_score = float("inf")
+
+            for i in range(len(working_clusters)):
+                for j in range(i + 1, len(working_clusters)):
+                    score = merge_score(
+                        working_clusters[i],
+                        working_clusters[j]
+                    )
+
+                    if score < best_score:
+                        best_score = score
+                        best_pair = (i, j)
+
+            if best_pair is None or best_score > 1.0:
+                break
+
+            i, j = best_pair
+
+            merged = np.concatenate(
+                (working_clusters[i], working_clusters[j])
+            )
+
+            working_clusters = [
+                cluster
+                for index, cluster in enumerate(working_clusters)
+                if index != i and index != j
+            ]
+
+            working_clusters.append(merged)
+
+        return working_clusters
     def sort_cluster_by_distance(self, cluster):
         convert_cluster = np.zeros(len(cluster), dtype=float)
         for idx, c in enumerate(cluster):
@@ -1290,15 +1976,22 @@ class GA:
 
     # ==================== GA + Relocate + Swap + Route Elimination ====================
     def fit_allClusters(self, clusters):
+        print(f"Số cluster K-means: {len(clusters)}")
 
-        # ==========================================
-        # Bước 1: Ghép các cụm phù hợp
-        # ==========================================
+        print("\n--- TRƯỚC KHI GHÉP CLUSTER ---")
+        self.diagnose_clusters(clusters)
+
         clusters = self.re_cluster_by_timewindow(clusters)
 
-        # ==========================================
-        # Bước 2: GA tối ưu từng cụm
-        # ==========================================
+        print(f"Số cluster sau khi ghép: {len(clusters)}")
+        print(
+            "Kích thước cluster:",
+            [len(cluster) for cluster in clusters]
+        )
+
+        print("\n--- SAU KHI GHÉP CLUSTER ---")
+        self.diagnose_clusters(clusters)
+
         for i in range(len(clusters)):
             self.fit(cluster=clusters[i])
 
@@ -1312,6 +2005,8 @@ class GA:
             for route in cluster_routes:
                 all_routes.append(list(route))
 
+        print(f"[1] Sau GA: {len(all_routes)} xe")
+
         # ==========================================
         # Bước 4: Relocate
         # Chuyển khách giữa các tuyến nhằm
@@ -1321,6 +2016,7 @@ class GA:
             all_routes
         )
 
+        print(f"[2] Sau Relocate: {len(improved_routes)} xe")
         # ==========================================
         # Bước 5: Swap
         # Hoán đổi khách giữa các tuyến nhằm
@@ -1330,59 +2026,48 @@ class GA:
             improved_routes
         )
 
+        print(f"[3] Sau Swap: {len(swapped_routes)} xe")
+
+        ordered_routes = self.optimize_all_route_orders(
+            swapped_routes
+        )
+
+        print(f"[4] Sau Optimize: {len(ordered_routes)} xe")
         # ==========================================
         # Bước 6: Route Elimination
         # Sau khi Swap thay đổi cấu trúc tuyến,
         # thử loại bỏ hoàn toàn một tuyến
         # ==========================================
 
-        optimized_routes = self.eliminate_routes(
-            swapped_routes
-        )
-        # ==========================================
-        # Kiểm tra nghiệm cuối
-        # ==========================================
-        validation = self.validate_solution(
-            optimized_routes
-        )
+        optimized_routes = self.eliminate_routes(ordered_routes)
+        print(f"[5] Sau Eliminate: {len(optimized_routes)} xe")
+        optimized_routes = self.optimize_all_route_orders(optimized_routes)
 
+        optimized_routes = self.relocate_for_distance(optimized_routes)
+        optimized_routes = self.optimize_all_route_orders(optimized_routes)
+
+        before_star = sum(self.calculate_route_distance(r) for r in optimized_routes)
+
+        optimized_routes = self.two_opt_star(optimized_routes)
+
+        after_star = sum(self.calculate_route_distance(r) for r in optimized_routes)
+
+        print(f"Trước 2-opt*: {len(optimized_routes)} xe | Distance = {before_star:.2f}")
+        print(f"Sau 2-opt*:   {len(optimized_routes)} xe | Distance = {after_star:.2f}")
+
+        validation = self.validate_solution(optimized_routes)
+
+        self.diagnose_routes(optimized_routes)
         print("========== KIỂM TRA NGHIỆM ==========")
-
-        print(
-            f"Hợp lệ toàn bộ: "
-            f"{validation['is_valid']}"
-        )
-
-        print(
-            f"Số khách dự kiến: "
-            f"{validation['expected_customer_count']}"
-        )
-
-        print(
-            f"Số khách thực tế: "
-            f"{validation['actual_customer_count']}"
-        )
-
-        print(
-            f"Route không hợp lệ: "
-            f"{validation['invalid_routes']}"
-        )
-
-        print(
-            f"Khách bị trùng: "
-            f"{validation['duplicate_customers']}"
-        )
-
-        print(
-            f"Khách bị thiếu: "
-            f"{validation['missing_customers']}"
-        )
-
-        print(
-            f"Khách ngoài phạm vi: "
-            f"{validation['extra_customers']}"
-        )
-
+        print(f"Số xe sử dụng: "f"{validation['vehicle_count']}/"f"{validation['vehicle_limit']}")
+        print(f"Ràng buộc số xe: "f"{validation['vehicle_limit_feasible']}")
+        print(f"Hợp lệ toàn bộ: {validation['is_valid']}")
+        print(f"Số khách dự kiến: {validation['expected_customer_count']}")
+        print(f"Số khách thực tế: {validation['actual_customer_count']}")
+        print(f"Route không hợp lệ: {validation['invalid_routes']}")
+        print(f"Khách bị trùng: {validation['duplicate_customers']}")
+        print(f"Khách bị thiếu: {validation['missing_customers']}")
+        print(f"Khách ngoài phạm vi: {validation['extra_customers']}")
         print("======================================")
         # ==========================================
         # Bước 7: Tính lại tổng quãng đường

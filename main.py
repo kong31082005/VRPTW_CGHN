@@ -18,7 +18,6 @@ if __name__ == "__main__":
     algorithms = ['GA']  # 'GA', 'PSO', 'ACO'
 
     # =============================== Thông số VRPTW ===============================
-    VEHCICLE_CAPACITY = 200   # Trọng tải tối đa của 1 xe
     M = 0                     # Sai số cửa sổ thời gian
 
     # =============================== Thông số K-Means ===============================
@@ -59,11 +58,11 @@ if __name__ == "__main__":
     # =============================== Thông số dữ liệu ===============================
     TITLE_NAMES = ['Route', 'Distance', 'Fitness', 'RunTime']
 
-    DATA_ID = None
+    DATA_ID = "C101"
     DATA_NAME = "C1"
 
     DATA_NUMBER_CUS = "100"
-    RUN_TIMES = 10
+    RUN_TIMES = 1
 
     EXCEL_FILE = None
     FILE_EXCEL_PATH = "result/"
@@ -170,10 +169,13 @@ if __name__ == "__main__":
                 # =============================== Đọc dữ liệu ===============================
                 _start_time = time.time()
 
-                data, customers = load_txt_dataset(
+                data, customers, vehicle_number, vehicle_capacity = load_txt_dataset(
                     url=url_data,
                     name_of_id=data_file
                 )
+
+                logging.info(f"Số xe tối đa: {vehicle_number}")
+                logging.info(f"Tải trọng xe: {vehicle_capacity}")
 
                 logging.info(
                     f"Thời gian lấy dữ liệu: "
@@ -244,7 +246,8 @@ if __name__ == "__main__":
                                 generation=GENERATION,
                                 crossover_rate=CROSSOVER_RATE,
                                 mutation_rate=MUTATION_RATE,
-                                vehcicle_capacity=VEHCICLE_CAPACITY,
+                                vehcicle_capacity=vehicle_capacity,
+                                vehicle_number=vehicle_number,
                                 conserve_rate=CONSERVE_RATE,
                                 M=M,
                                 customers=customers
