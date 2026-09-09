@@ -58,8 +58,8 @@ if __name__ == "__main__":
     # =============================== Thông số dữ liệu ===============================
     TITLE_NAMES = ['Route', 'Distance', 'Fitness', 'RunTime']
 
-    DATA_ID = "C101"
-    DATA_NAME = "C1"
+    DATA_ID = "C201"
+    DATA_NAME = "C2"
 
     DATA_NUMBER_CUS = "100"
     RUN_TIMES = 1

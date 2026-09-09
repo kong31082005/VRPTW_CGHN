@@ -676,114 +676,68 @@ class GA:
 
         return options[:max_options]
 
-    def backtrack_eliminate(
-        self,
-        customers_to_move,
-        routes,
-        customer_index=0,
-        max_options=5,
-        max_nodes=3000,
-        counter=None
-    ):
-
+    def backtrack_eliminate(self, customers_to_move, routes, customer_index=0, max_options=3, max_nodes=600, counter=None):
         if counter is None:
             counter = [0]
 
-        # Giới hạn search để tránh chạy quá lâu
         if counter[0] >= max_nodes:
             return None
 
         counter[0] += 1
 
-        # ==========================================
-        # Đã chuyển hết customer
-        # ==========================================
+        # Đã chuyển hết khách
         if customer_index >= len(customers_to_move):
             return [list(route) for route in routes]
 
         customer_id = customers_to_move[customer_index]
 
         # ==========================================
-        # LEVEL 0: thử nhiều direct insertion
+        # Level 0: Direct insertion
         # ==========================================
-        insertion_options = self.get_best_insertions(
-            customer_id,
-            routes,
-            max_options=max_options
-        )
+        insertion_options = self.get_best_insertions(customer_id, routes, max_options=max_options)
 
         for _, route_idx, position in insertion_options:
-
-            new_routes = [
-                list(route)
-                for route in routes
-            ]
-
-            new_routes[route_idx].insert(
-                position,
-                customer_id
-            )
+            new_routes = [list(route) for route in routes]
+            new_routes[route_idx].insert(position, customer_id)
 
             result = self.backtrack_eliminate(
-                customers_to_move,
-                new_routes,
-                customer_index + 1,
-                max_options,
-                max_nodes,
-                counter
+                customers_to_move, new_routes, customer_index + 1,
+                max_options, max_nodes, counter
             )
 
             if result is not None:
                 return result
 
         # ==========================================
-        # LEVEL 1: 1-ejection
+        # Level 1: 1-ejection
         # ==========================================
-        ejected_routes = self.try_ejection_insert(
-            customer_id,
-            routes
-        )
+        ejected_routes = self.try_ejection_insert(customer_id, routes)
 
         if ejected_routes is not None:
-
             result = self.backtrack_eliminate(
-                customers_to_move,
-                ejected_routes,
-                customer_index + 1,
-                max_options,
-                max_nodes,
-                counter
+                customers_to_move, ejected_routes, customer_index + 1,
+                max_options, max_nodes, counter
             )
 
             if result is not None:
                 return result
 
         # ==========================================
-        # LEVEL 2: 2-ejection
+        # Level 2: 2-ejection
+        # Chỉ dùng cho route nguồn nhỏ
         # ==========================================
-        double_ejected_routes = self.try_double_ejection_insert(
-            customer_id,
-            routes
-        )
+        if len(customers_to_move) <= 5:
+            double_ejected_routes = self.try_double_ejection_insert(customer_id, routes)
 
-        if double_ejected_routes is not None:
+            if double_ejected_routes is not None:
+                result = self.backtrack_eliminate(
+                    customers_to_move, double_ejected_routes, customer_index + 1,
+                    max_options, max_nodes, counter
+                )
 
-            result = self.backtrack_eliminate(
-                customers_to_move,
-                double_ejected_routes,
-                customer_index + 1,
-                max_options,
-                max_nodes,
-                counter
-            )
+                if result is not None:
+                    return result
 
-            if result is not None:
-                return result
-
-        # ==========================================
-        # Không tìm được phương án
-        # → quay lui
-        # ==========================================
         return None
 
     def try_ejection_insert(self, customer_id, routes):
@@ -959,34 +913,21 @@ class GA:
         return None
     
     def eliminate_routes(self, routes):
-
-        routes = [
-            list(route)
-            for route in routes
-        ]
-
+        routes = [list(route) for route in routes]
         improved = True
 
         while improved:
-
             improved = False
 
-            # ==========================================
-            # Ưu tiên route nhỏ + demand thấp
-            # ==========================================
             route_order = sorted(
                 range(len(routes)),
                 key=lambda i: (
                     len(routes[i]),
-                    sum(
-                        self.customers[c].demand
-                        for c in routes[i]
-                    )
+                    sum(self.customers[c].demand for c in routes[i])
                 )
             )
 
             for source_idx in route_order:
-
                 if source_idx >= len(routes):
                     continue
 
@@ -995,111 +936,60 @@ class GA:
                 if not source_route:
                     continue
 
-                # Các route còn lại
+                # Chỉ search sâu với route nhỏ
+                if len(source_route) > 6:
+                    continue
+
                 base_routes = [
                     list(route)
                     for i, route in enumerate(routes)
                     if i != source_idx
                 ]
 
-                # ==========================================
-                # Hardest-first
-                #
-                # Khách có ít vị trí chèn khả thi nhất
-                # được xử lý trước
-                # ==========================================
                 hardest_first = sorted(
                     source_route,
                     key=lambda c: len(
                         self.get_best_insertions(
                             c,
                             base_routes,
-                            max_options=1000
+                            max_options=20
                         )
                     )
                 )
 
-                # ==========================================
-                # Các thứ tự thử
-                # ==========================================
                 customer_orders = [
-
-                    # 1. Khó chèn nhất trước
                     hardest_first,
-
-                    # 2. Due time sớm
                     sorted(
                         source_route,
-                        key=lambda c:
-                        self.customers[c].dueTime
+                        key=lambda c: self.customers[c].dueTime
                     ),
-
-                    # 3. Ready time sớm
-                    sorted(
-                        source_route,
-                        key=lambda c:
-                        self.customers[c].readyTime
-                    ),
-
-                    # 4. Demand lớn
-                    sorted(
-                        source_route,
-                        key=lambda c:
-                        self.customers[c].demand,
-                        reverse=True
-                    ),
-
-                    # 5. Thứ tự hiện tại
-                    list(source_route),
-
-                    # 6. Thứ tự ngược
-                    list(reversed(source_route))
+                    list(source_route)
                 ]
 
                 route_eliminated = False
 
-                # ==========================================
-                # Thử từng customer order
-                # ==========================================
                 for customers_to_move in customer_orders:
-
-                    candidate_routes = [
-                        list(route)
-                        for route in base_routes
-                    ]
-
                     result = self.backtrack_eliminate(
                         customers_to_move,
-                        candidate_routes,
-
-                        # thử tối đa 5 direct insertion/customer
-                        max_options=5,
-
-                        # giới hạn số node search
-                        max_nodes=3000
+                        [list(route) for route in base_routes],
+                        max_options=3,
+                        max_nodes=600
                     )
 
-                    # ==========================================
-                    # Xóa route thành công
-                    # ==========================================
-                    if result is not None:
+                    if result is None:
+                        continue
 
-                        # Kiểm tra an toàn
-                        if not all(
-                            self.is_route_feasible(route)
-                            for route in result
-                        ):
-                            continue
+                    if not all(
+                        self.is_route_feasible(route)
+                        for route in result
+                    ):
+                        continue
 
-                        routes = result
+                    routes = result
+                    improved = True
+                    route_eliminated = True
+                    break
 
-                        improved = True
-                        route_eliminated = True
-
-                        break
-
-                # Sau khi xóa một route:
-                # tính route_order lại từ đầu
                 if route_eliminated:
                     break
 
