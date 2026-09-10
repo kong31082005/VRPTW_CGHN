@@ -1865,15 +1865,18 @@ class GA:
         self.best_fitness_pD = -1
 
     # ==================== GA + Relocate + Swap + Route Elimination ====================
-    def fit_allClusters(self, clusters):
+    def fit_allClusters(self, clusters, use_recluster=True):
         print(f"Số cluster K-means: {len(clusters)}")
 
         print("\n--- TRƯỚC KHI GHÉP CLUSTER ---")
         self.diagnose_clusters(clusters)
 
-        clusters = self.re_cluster_by_timewindow(clusters)
+        if use_recluster:
+            clusters = self.re_cluster_by_timewindow(
+                clusters
+            )
 
-        print(f"Số cluster sau khi ghép: {len(clusters)}")
+        print(f"Số cluster sau xử lý: {len(clusters)}")
         print(
             "Kích thước cluster:",
             [len(cluster) for cluster in clusters]
@@ -1895,7 +1898,11 @@ class GA:
             for route in cluster_routes:
                 all_routes.append(list(route))
 
-        print(f"[1] Sau GA: {len(all_routes)} xe")
+        print(
+            f"[1] Sau GA: {len(all_routes)} xe | "
+            f"Distance = "
+            f"{sum(self.calculate_route_distance(r) for r in all_routes):.2f}"
+        )
 
         # ==========================================
         # Bước 4: Relocate
@@ -1906,7 +1913,11 @@ class GA:
             all_routes
         )
 
-        print(f"[2] Sau Relocate: {len(improved_routes)} xe")
+        print(
+            f"[2] Sau Relocate: {len(improved_routes)} xe | "
+            f"Distance = "
+            f"{sum(self.calculate_route_distance(r) for r in improved_routes):.2f}"
+        )
         # ==========================================
         # Bước 5: Swap
         # Hoán đổi khách giữa các tuyến nhằm
@@ -1916,13 +1927,21 @@ class GA:
             improved_routes
         )
 
-        print(f"[3] Sau Swap: {len(swapped_routes)} xe")
-
+        print(
+            f"[3] Sau Swap: {len(swapped_routes)} xe | "
+            f"Distance = "
+            f"{sum(self.calculate_route_distance(r) for r in swapped_routes):.2f}"
+        )
         ordered_routes = self.optimize_all_route_orders(
             swapped_routes
         )
 
-        print(f"[4] Sau Optimize: {len(ordered_routes)} xe")
+        print(
+            f"[4] Sau Optimize: {len(ordered_routes)} xe | "
+            f"Distance = "
+            f"{sum(self.calculate_route_distance(r) for r in ordered_routes):.2f}"
+        )
+
         # ==========================================
         # Bước 6: Route Elimination
         # Sau khi Swap thay đổi cấu trúc tuyến,
@@ -1930,11 +1949,33 @@ class GA:
         # ==========================================
 
         optimized_routes = self.eliminate_routes(ordered_routes)
-        print(f"[5] Sau Eliminate: {len(optimized_routes)} xe")
+        print(
+            f"[5] Sau Eliminate: {len(optimized_routes)} xe | "
+            f"Distance = "
+            f"{sum(self.calculate_route_distance(r) for r in optimized_routes):.2f}"
+        )
         optimized_routes = self.optimize_all_route_orders(optimized_routes)
+        print(
+            f"[6] Sau Optimize lần 2: "
+            f"{len(optimized_routes)} xe | "
+            f"Distance = "
+            f"{sum(self.calculate_route_distance(r) for r in optimized_routes):.2f}"
+        )
 
         optimized_routes = self.relocate_for_distance(optimized_routes)
+        print(
+            f"[7] Sau Relocate Distance: "
+            f"{len(optimized_routes)} xe | "
+            f"Distance = "
+            f"{sum(self.calculate_route_distance(r) for r in optimized_routes):.2f}"
+        )
         optimized_routes = self.optimize_all_route_orders(optimized_routes)
+        print(
+            f"[8] Sau Optimize cuối: "
+            f"{len(optimized_routes)} xe | "
+            f"Distance = "
+            f"{sum(self.calculate_route_distance(r) for r in optimized_routes):.2f}"
+        )
 
         before_star = sum(self.calculate_route_distance(r) for r in optimized_routes)
 

@@ -32,6 +32,8 @@ if __name__ == "__main__":
 
     NUMBER_OF_CUSTOMER = 100
 
+    # Bật/tắt bước re-cluster theo time window
+    USE_RECLUSTER = False
     # =============================== Thông số GA ===============================
     INDIVIDUAL = 100
     GENERATION = 100
@@ -58,8 +60,8 @@ if __name__ == "__main__":
     # =============================== Thông số dữ liệu ===============================
     TITLE_NAMES = ['Route', 'Distance', 'Fitness', 'RunTime']
 
-    DATA_ID = "C201"
-    DATA_NAME = "C2"
+    DATA_ID = "R105"
+    DATA_NAME = "R1"
 
     DATA_NUMBER_CUS = "100"
     RUN_TIMES = 1
@@ -257,7 +259,6 @@ if __name__ == "__main__":
                             al = PSO(
                                 num_particles=NUM_PARTICLES,
                                 max_iter=MAX_ITER_PSO,
-                                vehcicle_capacity=VEHCICLE_CAPACITY,
                                 M=M,
                                 w=W,
                                 c1=C1,
@@ -269,7 +270,6 @@ if __name__ == "__main__":
                             al = ACO(
                                 num_ants=NUM_ANTS,
                                 max_iter=MAX_ITER_ACO,
-                                vehcicle_capacity=VEHCICLE_CAPACITY,
                                 M=M,
                                 alfa=ALFA,
                                 sigm=SIGM,
@@ -291,7 +291,8 @@ if __name__ == "__main__":
                         route_count_global,
                         process_time
                     ) = al.fit_allClusters(
-                        clusters=cluster
+                        clusters=cluster,
+                        use_recluster=USE_RECLUSTER
                     )
 
                     run_time_mean += process_time
