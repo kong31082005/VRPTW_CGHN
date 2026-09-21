@@ -843,7 +843,15 @@ class GA:
 
         return routes
 
-    def backtrack_eliminate(self, customers_to_move, routes, customer_index=0, max_options=3, max_nodes=600, counter=None):
+    def backtrack_eliminate(
+        self,
+        customers_to_move,
+        routes,
+        customer_index=0,
+        max_options=3,
+        max_nodes=600,
+        counter=None
+    ):
         if counter is None:
             counter = [0]
 
@@ -861,15 +869,26 @@ class GA:
         # ==========================================
         # Level 0: Direct insertion
         # ==========================================
-        insertion_options = self.get_best_insertions(customer_id, routes, max_options=max_options)
+        insertion_options = self.get_best_insertions(
+            customer_id,
+            routes,
+            max_options=max_options
+        )
 
         for _, route_idx, position in insertion_options:
             new_routes = [list(route) for route in routes]
-            new_routes[route_idx].insert(position, customer_id)
+            new_routes[route_idx].insert(
+                position,
+                customer_id
+            )
 
             result = self.backtrack_eliminate(
-                customers_to_move, new_routes, customer_index + 1,
-                max_options, max_nodes, counter
+                customers_to_move,
+                new_routes,
+                customer_index + 1,
+                max_options,
+                max_nodes,
+                counter
             )
 
             if result is not None:
@@ -878,13 +897,12 @@ class GA:
         # ==========================================
         # Level 1: 1-ejection
         # ==========================================
-        ejection_candidates = self.try_ejection_insert(
+        ejected_routes = self.try_ejection_insert(
             customer_id,
-            routes,
-            max_candidates=3
+            routes
         )
 
-        for ejected_routes in ejection_candidates:
+        if ejected_routes is not None:
             result = self.backtrack_eliminate(
                 customers_to_move,
                 ejected_routes,
@@ -902,17 +920,14 @@ class GA:
         # Chỉ dùng cho route nguồn nhỏ
         # ==========================================
         if len(customers_to_move) <= 5:
-            double_ejection_candidates = (
+            double_ejected_routes = (
                 self.try_double_ejection_insert(
                     customer_id,
-                    routes,
-                    max_candidates=2
+                    routes
                 )
             )
 
-            for double_ejected_routes in (
-                double_ejection_candidates
-            ):
+            if double_ejected_routes is not None:
                 result = self.backtrack_eliminate(
                     customers_to_move,
                     double_ejected_routes,
@@ -930,14 +945,16 @@ class GA:
     def try_ejection_insert(
         self,
         customer_id,
-        routes,
-        max_candidates=3
+        routes
     ):
-        candidates = []
+        best_routes = None
+        best_cost = float("inf")
 
         for target_idx, target_route in enumerate(routes):
             old_target_distance = (
-                self.calculate_route_distance(target_route)
+                self.calculate_route_distance(
+                    target_route
+                )
             )
 
             for eject_pos in range(len(target_route)):
@@ -948,20 +965,25 @@ class GA:
                     + target_route[eject_pos + 1:]
                 )
 
-                for insert_pos in range(len(reduced_route) + 1):
+                for insert_pos in range(
+                    len(reduced_route) + 1
+                ):
                     new_target = (
                         reduced_route[:insert_pos]
                         + [customer_id]
                         + reduced_route[insert_pos:]
                     )
 
-                    if not self.is_route_feasible(new_target):
+                    if not self.is_route_feasible(
+                        new_target
+                    ):
                         continue
 
                     temp_routes = [
                         list(route)
                         for route in routes
                     ]
+
                     temp_routes[target_idx] = new_target
 
                     other_indices = [
@@ -976,13 +998,17 @@ class GA:
                     ]
 
                     old_other_distance = sum(
-                        self.calculate_route_distance(route)
+                        self.calculate_route_distance(
+                            route
+                        )
                         for route in other_routes
                     )
 
-                    route_idx, position = self.best_insertion(
-                        ejected_customer,
-                        other_routes
+                    route_idx, position = (
+                        self.best_insertion(
+                            ejected_customer,
+                            other_routes
+                        )
                     )
 
                     if route_idx is None:
@@ -994,7 +1020,9 @@ class GA:
                     )
 
                     new_other_distance = sum(
-                        self.calculate_route_distance(route)
+                        self.calculate_route_distance(
+                            route
+                        )
                         for route in other_routes
                     )
 
@@ -1017,7 +1045,9 @@ class GA:
                         continue
 
                     new_target_distance = (
-                        self.calculate_route_distance(new_target)
+                        self.calculate_route_distance(
+                            new_target
+                        )
                     )
 
                     cost = (
@@ -1027,27 +1057,24 @@ class GA:
                         - old_other_distance
                     )
 
-                    candidates.append(
-                        (cost, candidate_routes)
-                    )
+                    if cost < best_cost:
+                        best_cost = cost
+                        best_routes = candidate_routes
 
-        # Ưu tiên candidate có delta distance nhỏ
-        candidates.sort(key=lambda x: x[0])
-
-        return [
-            candidate_routes
-            for _, candidate_routes
-            in candidates[:max_candidates]
-        ]
-
+        return best_routes
+    
     def try_double_ejection_insert(
         self,
         customer_id,
-        routes,
-        max_candidates=2
+        routes
     ):
-        routes = [list(route) for route in routes]
-        candidates = []
+        routes = [
+            list(route)
+            for route in routes
+        ]
+
+        best_routes = None
+        best_cost = float("inf")
 
         old_total_distance = sum(
             self.calculate_route_distance(route)
@@ -1087,6 +1114,7 @@ class GA:
                             list(route)
                             for route in routes
                         ]
+
                         candidate_routes[target_idx] = (
                             new_target
                         )
@@ -1172,17 +1200,11 @@ class GA:
                                 - old_total_distance
                             )
 
-                            candidates.append(
-                                (cost, result_routes)
-                            )
+                            if cost < best_cost:
+                                best_cost = cost
+                                best_routes = result_routes
 
-        candidates.sort(key=lambda x: x[0])
-
-        return [
-            candidate_routes
-            for _, candidate_routes
-            in candidates[:max_candidates]
-        ]
+        return best_routes
     
     def eliminate_routes(self, routes):
         routes = [list(route) for route in routes]
@@ -1267,7 +1289,7 @@ class GA:
                 # ==========================================
                 if (
                     not route_eliminated
-                    and len(source_route) <= 6
+                    and len(source_route) <= 4
                 ):
                     print("\n[ELIMINATION FAILED]")
 
@@ -1468,57 +1490,41 @@ class GA:
         return routes
 
     def relocate_for_distance(self, routes):
-        routes = [
-            list(route)
-            for route in routes
-        ]
+        routes = [list(route) for route in routes]
 
         improved = True
 
         while improved:
             improved = False
 
-            best_move = None
-            best_gain = 0.0
-
             for source_idx in range(len(routes)):
                 if len(routes[source_idx]) <= 1:
                     continue
 
-                old_source = routes[source_idx]
-                old_source_distance = (
-                    self.calculate_route_distance(
-                        old_source
-                    )
-                )
-
-                for pos in range(len(old_source)):
-                    customer_id = old_source[pos]
-
-                    new_source = (
-                        old_source[:pos]
-                        + old_source[pos + 1:]
-                    )
-
-                    if not self.is_route_feasible(
-                        new_source
-                    ):
-                        continue
-
-                    new_source_distance = (
-                        self.calculate_route_distance(
-                            new_source
-                        )
-                    )
+                for pos in range(len(routes[source_idx])):
+                    customer_id = routes[source_idx][pos]
 
                     for target_idx in range(len(routes)):
                         if target_idx == source_idx:
                             continue
 
+                        old_source = routes[source_idx]
                         old_target = routes[target_idx]
 
+                        new_source = (
+                            old_source[:pos]
+                            + old_source[pos + 1:]
+                        )
+
+                        if not self.is_route_feasible(
+                            new_source
+                        ):
+                            continue
+
                         old_distance = (
-                            old_source_distance
+                            self.calculate_route_distance(
+                                old_source
+                            )
                             + self.calculate_route_distance(
                                 old_target
                             )
@@ -1539,39 +1545,36 @@ class GA:
                                 continue
 
                             new_distance = (
-                                new_source_distance
+                                self.calculate_route_distance(
+                                    new_source
+                                )
                                 + self.calculate_route_distance(
                                     new_target
                                 )
                             )
 
-                            gain = (
-                                old_distance
-                                - new_distance
-                            )
-
-                            if gain > best_gain + 1e-9:
-                                best_gain = gain
-
-                                best_move = (
-                                    source_idx,
-                                    target_idx,
-                                    new_source,
+                            if (
+                                new_distance
+                                < old_distance - 1e-9
+                            ):
+                                routes[source_idx] = (
+                                    new_source
+                                )
+                                routes[target_idx] = (
                                     new_target
                                 )
 
-            if best_move is not None:
-                (
-                    source_idx,
-                    target_idx,
-                    new_source,
-                    new_target
-                ) = best_move
+                                improved = True
+                                break
 
-                routes[source_idx] = new_source
-                routes[target_idx] = new_target
+                        if improved:
+                            break
 
-                improved = True
+                    if improved:
+                        break
+
+                if improved:
+                    break
 
         return routes
     # Tính độ thích nghi, quãng đường và số xe cho toàn bộ quần thể
