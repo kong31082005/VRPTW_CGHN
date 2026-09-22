@@ -60,11 +60,11 @@ if __name__ == "__main__":
     # =============================== Thông số dữ liệu ===============================
     TITLE_NAMES = ['Route', 'Distance', 'Fitness', 'RunTime']
 
-    DATA_ID = "C101"
+    DATA_ID = None
     DATA_NAME = "C1"
 
     DATA_NUMBER_CUS = "100"
-    RUN_TIMES = 1
+    RUN_TIMES = 10
 
     EXCEL_FILE = None
     FILE_EXCEL_PATH = "result/"
