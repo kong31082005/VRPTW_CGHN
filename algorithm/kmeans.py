@@ -12,11 +12,9 @@ class Kmeans():
 
     def __init__(
         self,
-        epsilon: float = 1e-5,
         maxiter: int = 1000,
         n_cluster: int = 3
     ):
-        self.__epsilon = epsilon
         self.__maxiter = maxiter
         self.n_cluster = n_cluster
 
@@ -418,41 +416,6 @@ class Kmeans():
         return np.array(
             sorted_V
         )
-
-    # ===============================
-    # Hàm cũ - giữ để tránh ảnh hưởng
-    # các phần khác của project
-    # ===============================
-    def sort_cluster_by_len(
-        self,
-        V: np.ndarray,
-        FirstPoint: np.ndarray
-    ) -> np.ndarray:
-
-        V_len = [
-            len(v)
-            for v in V
-        ]
-
-        sorted_indices = (
-            np.argsort(V_len)
-        )
-
-        sorted_V = np.zeros(
-            (
-                len(V),
-                V.shape[1]
-            )
-        )
-
-        for idx, val in enumerate(
-            sorted_indices
-        ):
-            sorted_V[idx] = (
-                V[val]
-            )
-
-        return sorted_V
 
     # ===============================
     # Elbow Method - bản tự cài đặt
